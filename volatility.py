@@ -1,22 +1,23 @@
 """
 volatility.py
-Calcola la volatilita storica realizzata e il suo percentile attuale
-(proxy per "le opzioni sono storicamente economiche o costose adesso"),
-e recupera la IV reale dalla catena opzioni live via yfinance.
+Computes realized historical volatility and its current percentile
+(proxy for "are options historically cheap or expensive right now"),
+and fetches the real IV from the live options chain via yfinance.
 
-NOTA IMPORTANTE SUI LIMITI DI QUESTO APPROCCIO:
-yfinance non fornisce uno storico della volatilita implicita (IV).
-Per stimare se "oggi" le opzioni sono relativamente economiche, questo
-modulo usa la volatilita storica REALIZZATA (HV, calcolata sui rendimenti
-passati del sottostante) come proxy, e calcola il percentile del valore
-odierno rispetto al periodo analizzato.
+IMPORTANT NOTE ON THE LIMITATIONS OF THIS APPROACH:
+yfinance does not provide an implied volatility (IV) history.
+To estimate whether options are relatively cheap "today", this module
+uses the past REALIZED volatility of the underlying (HV, computed from
+historical returns) as an approximate proxy, and calculates the percentile
+of today's value relative to the analyzed period.
 
-Questo NON e lo stesso dell'IV percentile che si vede su un broker
-(IBKR, ToS, Tastytrade, ecc.), che riflette le aspettative del mercato
-sul futuro, non solo il comportamento passato del prezzo. Le due misure
-sono correlate ma possono divergere, specialmente attorno a eventi noti
-(earnings, dati macro). Trattalo come un'approssimazione utile per un
-primo screening, non come il dato definitivo su cui basare una decisione.
+This is NOT the same as the IV percentile shown on a broker platform
+(IBKR, ToS, Tastytrade, etc.), which reflects the market's expectations
+about the future, not just past price behavior. The two measures are
+correlated but can diverge significantly, especially around known events
+(earnings, macro data releases). Treat this as a useful approximation
+for a first screening pass, not as the definitive figure on which to
+base a decision.
 """
 import numpy as np
 import pandas as pd
@@ -25,47 +26,47 @@ import yfinance as yf
 
 def realized_vol_percentile(price_df: pd.DataFrame, window: int = 20) -> dict:
     """
-    Calcola la volatilita storica realizzata annualizzata su una rolling
-    window di `window` giorni, e il percentile del valore piu recente
-    rispetto a tutto il periodo storico disponibile nel DataFrame.
+    Computes the annualized realized historical volatility on a rolling
+    window of `window` days, and the percentile of the most recent value
+    relative to the full historical period available in the DataFrame.
     """
     df = price_df.copy()
     log_ret = np.log(df["Close"] / df["Close"].shift(1))
-    rolling_vol = log_ret.rolling(window).std() * np.sqrt(252) * 100  # annualizzata, in %
+    rolling_vol = log_ret.rolling(window).std() * np.sqrt(252) * 100  # annualized, in %
 
     rolling_vol = rolling_vol.dropna()
     if rolling_vol.empty:
         return {
-            "hv_attuale_pct": None,
-            "hv_percentile_storico": None,
-            "hv_media_periodo_pct": None,
-            "hv_min_periodo_pct": None,
-            "hv_max_periodo_pct": None,
+            "hv_current_pct": None,
+            "hv_percentile": None,
+            "hv_avg_period_pct": None,
+            "hv_min_period_pct": None,
+            "hv_max_period_pct": None,
         }
 
     current_vol = rolling_vol.iloc[-1]
     percentile = (rolling_vol < current_vol).mean() * 100
 
     return {
-        "hv_attuale_pct": round(float(current_vol), 2),
-        "hv_percentile_storico": round(float(percentile), 1),
-        "hv_media_periodo_pct": round(float(rolling_vol.mean()), 2),
-        "hv_min_periodo_pct": round(float(rolling_vol.min()), 2),
-        "hv_max_periodo_pct": round(float(rolling_vol.max()), 2),
+        "hv_current_pct": round(float(current_vol), 2),
+        "hv_percentile": round(float(percentile), 1),
+        "hv_avg_period_pct": round(float(rolling_vol.mean()), 2),
+        "hv_min_period_pct": round(float(rolling_vol.min()), 2),
+        "hv_max_period_pct": round(float(rolling_vol.max()), 2),
     }
 
 
 def fetch_atm_iv_snapshot(ticker: str, max_expiries: int = 2) -> list:
     """
-    Recupera la IV reale di mercato per le opzioni piu vicine all'ATM
-    (at-the-money) sulle prossime `max_expiries` scadenze disponibili
-    sulla catena opzioni live.
+    Fetches the real market IV for the options closest to ATM
+    (at-the-money) across the next `max_expiries` available expiries
+    on the live options chain.
 
-    Ritorna una lista di dict con: scadenza, spot, strike ATM,
-    IV call/put in %, volume call/put.
+    Returns a list of dicts with: expiry, spot, ATM strike,
+    call/put IV in %, call/put volume.
 
-    Richiede connessione internet attiva (yfinance interroga Yahoo Finance
-    in tempo reale). Se il ticker non ha opzioni quotate, ritorna lista vuota.
+    Requires an active internet connection (yfinance queries Yahoo Finance
+    in real time). Returns an empty list if the ticker has no listed options.
     """
     tk = yf.Ticker(ticker)
     expiries = tk.options[:max_expiries]
@@ -93,7 +94,7 @@ def fetch_atm_iv_snapshot(ticker: str, max_expiries: int = 2) -> list:
         atm_put = puts.sort_values("dist").iloc[0]
 
         results.append({
-            "scadenza": exp,
+            "expiry": exp,
             "spot": round(float(spot), 2),
             "strike_atm": float(atm_call["strike"]),
             "iv_call_pct": round(float(atm_call["impliedVolatility"]) * 100, 1),

@@ -1,68 +1,67 @@
 """
 seasonality.py
-Calcola statistiche di stagionalita storica (rendimento medio per mese,
-win rate, deviazione standard) per un ticker, a partire dallo storico
-prezzi giornaliero.
+Computes historical seasonality statistics (average monthly return,
+win rate, standard deviation) for a ticker, from daily price history.
 """
 import pandas as pd
 
-MONTH_NAMES_IT = {
-    1: "Gen", 2: "Feb", 3: "Mar", 4: "Apr", 5: "Mag", 6: "Giu",
-    7: "Lug", 8: "Ago", 9: "Set", 10: "Ott", 11: "Nov", 12: "Dic",
+MONTH_NAMES = {
+    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
 }
 
 
 def compute_monthly_seasonality(price_df: pd.DataFrame) -> pd.DataFrame:
     """
-    price_df: DataFrame con colonna 'Close' indicizzata da DatetimeIndex
-    (es. output di yfinance.download con dati giornalieri).
+    price_df: DataFrame with a 'Close' column indexed by DatetimeIndex
+    (e.g. output of yfinance.download with daily data).
 
-    Ritorna un DataFrame indicizzato per mese (Gen..Dic) con colonne:
-    media_pct, dev_std_pct, n_oss, n_positivi, win_rate_pct
-    Ordinato dal mese storicamente migliore al peggiore.
+    Returns a DataFrame indexed by month (Jan..Dec) with columns:
+    avg_pct, std_pct, n_obs, n_positive, win_rate_pct
+    Sorted from the historically best to worst month.
     """
     df = price_df.copy()
     df["year"] = df.index.year
     df["month"] = df.index.month
 
-    # rendimento approssimato del mese: primo close vs ultimo close del mese
+    # approximate monthly return: first close vs last close of the month
     monthly = df.groupby(["year", "month"])["Close"].agg(["first", "last"])
     monthly["ret_pct"] = (monthly["last"] / monthly["first"] - 1) * 100
     monthly = monthly.reset_index()
 
     stats = monthly.groupby("month")["ret_pct"].agg(
-        media_pct="mean",
-        dev_std_pct="std",
-        n_oss="count",
+        avg_pct="mean",
+        std_pct="std",
+        n_obs="count",
     )
-    stats["n_positivi"] = monthly.groupby("month")["ret_pct"].apply(lambda x: (x > 0).sum())
-    stats["win_rate_pct"] = (stats["n_positivi"] / stats["n_oss"] * 100).round(1)
-    stats["media_pct"] = stats["media_pct"].round(2)
-    stats["dev_std_pct"] = stats["dev_std_pct"].round(2)
+    stats["n_positive"] = monthly.groupby("month")["ret_pct"].apply(lambda x: (x > 0).sum())
+    stats["win_rate_pct"] = (stats["n_positive"] / stats["n_obs"] * 100).round(1)
+    stats["avg_pct"] = stats["avg_pct"].round(2)
+    stats["std_pct"] = stats["std_pct"].round(2)
 
-    # mesi mancanti dal dataset (es. ticker troppo recente) vengono scartati
-    stats.index = [MONTH_NAMES_IT[m] for m in stats.index]
-    stats.index.name = "mese"
-    return stats.sort_values("media_pct", ascending=False)
+    # months missing from the dataset (e.g. ticker too recent) are dropped
+    stats.index = [MONTH_NAMES[m] for m in stats.index]
+    stats.index.name = "month"
+    return stats.sort_values("avg_pct", ascending=False)
 
 
 def best_and_worst_months(stats: pd.DataFrame, n: int = 3):
-    """Ritorna (migliori_n, peggiori_n) come DataFrame separati."""
-    best = stats.sort_values("media_pct", ascending=False).head(n)
-    worst = stats.sort_values("media_pct", ascending=True).head(n)
+    """Returns (best_n, worst_n) as separate DataFrames."""
+    best = stats.sort_values("avg_pct", ascending=False).head(n)
+    worst = stats.sort_values("avg_pct", ascending=True).head(n)
     return best, worst
 
 
-def reliability_flag(row: pd.Series) -> str:
+def reliability_flag(row: "pd.Series | pd.DataFrame") -> str:
     """
-    Flag qualitativo sulla robustezza statistica del pattern stagionale
-    per un singolo mese. Un campione piccolo o una deviazione standard
-    superiore alla media indicano un pattern poco affidabile.
+    Qualitative flag on the statistical robustness of the seasonal pattern
+    for a single month. A small sample or a standard deviation larger than
+    the mean indicate an unreliable pattern.
     """
-    if row["n_oss"] < 5:
-        return "campione molto piccolo"
-    if abs(row["dev_std_pct"]) > abs(row["media_pct"]) * 2:
-        return "rumore elevato rispetto al segnale"
+    if row["n_obs"] < 5:
+        return "very small sample"
+    if abs(row["std_pct"]) > abs(row["avg_pct"]) * 2:
+        return "high noise relative to signal"
     if row["win_rate_pct"] >= 70 or row["win_rate_pct"] <= 30:
-        return "pattern consistente"
-    return "pattern debole/misto"
+        return "consistent pattern"
+    return "weak/mixed pattern"

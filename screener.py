@@ -1,26 +1,29 @@
 """
 screener.py
-Tool da riga di comando per:
-  1. scaricare lo storico prezzi di una lista di ticker (yfinance)
-  2. calcolare la stagionalita mensile storica per ciascuno
-  3. stimare se la volatilita (e quindi il costo delle opzioni) e
-     attualmente bassa o alta rispetto al proprio storico (proxy HV)
-  4. recuperare uno snapshot della IV reale dalla catena opzioni live
-  5. produrre un ranking dei ticker per "opportunita stagionale +
-     costo opzioni contenuto"
+Command-line tool that, for a list of tickers:
+  1. downloads price history (yfinance)
+  2. computes monthly historical seasonality for each ticker
+  3. estimates whether volatility (and therefore option cost) is
+     currently low or high relative to its own history (HV proxy)
+  4. fetches a live IV snapshot from the options chain
+  5. produces a ticker ranking by "seasonal opportunity +
+     contained option cost"
 
-USO:
+USAGE:
+    source venv/bin/activate
     python screener.py --tickers GLD,XRT,EQT,UNG --years 5
     python screener.py --tickers AAPL --years 10 --no-options
     python screener.py --tickers GLD,XRT --years 5 --csv ranking.csv
 
 Setup:
+    python -m venv venv
+    source venv/bin/activate
     pip install -r requirements.txt
 
-IMPORTANTE: questo script e uno strumento di screening informativo,
-non genera segnali di trading e non costituisce consulenza finanziaria.
-Vedi README.md per i limiti metodologici (in particolare sulla stima
-della volatilita, vedi volatility.py).
+IMPORTANT: this script is an informational screening tool.
+It does not generate trading signals and does not constitute financial advice.
+See README.md for methodological limitations (in particular regarding
+volatility estimation, see volatility.py).
 """
 import argparse
 import sys
@@ -29,15 +32,15 @@ from datetime import datetime
 import pandas as pd
 import yfinance as yf
 
-from seasonality import compute_monthly_seasonality, MONTH_NAMES_IT, reliability_flag
+from seasonality import compute_monthly_seasonality, MONTH_NAMES, reliability_flag
 from volatility import realized_vol_percentile, fetch_atm_iv_snapshot
 
 
 def fetch_history(ticker: str, years: int) -> pd.DataFrame:
     df = yf.download(ticker, period=f"{years}y", interval="1d", progress=False, auto_adjust=True)
     if df.empty:
-        raise ValueError(f"Nessun dato trovato per {ticker}")
-    # yfinance puo restituire colonne MultiIndex anche per un singolo ticker
+        raise ValueError(f"No data found for {ticker}")
+    # yfinance may return MultiIndex columns even for a single ticker
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
@@ -51,50 +54,50 @@ def analyze_ticker(ticker: str, years: int, fetch_options: bool = True) -> dict:
     seas = compute_monthly_seasonality(df)
     vol = realized_vol_percentile(df)
 
-    seas_now = seas.loc[MONTH_NAMES_IT[current_month]] if MONTH_NAMES_IT[current_month] in seas.index else None
-    seas_next = seas.loc[MONTH_NAMES_IT[next_month]] if MONTH_NAMES_IT[next_month] in seas.index else None
+    seas_now = seas.loc[MONTH_NAMES[current_month]] if MONTH_NAMES[current_month] in seas.index else None
+    seas_next = seas.loc[MONTH_NAMES[next_month]] if MONTH_NAMES[next_month] in seas.index else None
 
     report = {
         "ticker": ticker,
-        "anni_richiesti": years,
-        "n_anni_dati_effettivi": int(df.index.year.nunique()),
-        "mese_corrente": MONTH_NAMES_IT[current_month],
-        "mese_prossimo": MONTH_NAMES_IT[next_month],
-        "stagionalita_mese_corrente": seas_now.to_dict() if seas_now is not None else None,
-        "stagionalita_mese_prossimo": seas_next.to_dict() if seas_next is not None else None,
-        "affidabilita_mese_corrente": reliability_flag(seas_now) if seas_now is not None else None,
-        "tabella_completa": seas,
-        "volatilita": vol,
+        "years_requested": years,
+        "n_years_actual_data": int(df.index.year.nunique()),
+        "current_month": MONTH_NAMES[current_month],
+        "next_month": MONTH_NAMES[next_month],
+        "seasonality_current_month": seas_now.to_dict() if seas_now is not None else None,
+        "seasonality_next_month": seas_next.to_dict() if seas_next is not None else None,
+        "reliability_current_month": reliability_flag(seas_now) if seas_now is not None else None,
+        "full_table": seas,
+        "volatility": vol,
     }
 
     if fetch_options:
         try:
-            report["opzioni_snapshot"] = fetch_atm_iv_snapshot(ticker)
+            report["options_snapshot"] = fetch_atm_iv_snapshot(ticker)
         except Exception as e:
-            report["opzioni_snapshot"] = f"non disponibile ({e})"
+            report["options_snapshot"] = f"unavailable ({e})"
 
     return report
 
 
 def score_opportunity(report: dict) -> float:
     """
-    Punteggio semplice ed esplicito, SOLO per ranking relativo tra i
-    ticker passati in input. Non e un segnale di acquisto/vendita.
+    Simple explicit score, used ONLY for relative ranking among the
+    input tickers. Not a buy/sell signal.
 
-    Combina:
-      - stagionalita attesa (mese corrente + prossimo, pesata per win rate)
-      - "sconto" sulla volatilita attuale rispetto al proprio storico
-        (percentile HV basso = punteggio piu alto = opzioni probabilmente
-        piu economiche del solito)
+    Combines:
+      - expected seasonality (current + next month, weighted by win rate)
+      - volatility "discount" vs own history
+        (low HV percentile = higher score = options probably
+        cheaper than usual)
     """
-    seas_now = report["stagionalita_mese_corrente"]
-    seas_next = report["stagionalita_mese_prossimo"]
-    vol_pct = report["volatilita"]["hv_percentile_storico"]
+    seas_now = report["seasonality_current_month"]
+    seas_next = report["seasonality_next_month"]
+    vol_pct = report["volatility"]["hv_percentile"]
 
     seas_score = 0.0
     for s in (seas_now, seas_next):
         if s:
-            seas_score += s["media_pct"] * (s["win_rate_pct"] / 100)
+            seas_score += s["avg_pct"] * (s["win_rate_pct"] / 100)
 
     if vol_pct is None:
         cheapness_score = 0.0
@@ -106,107 +109,107 @@ def score_opportunity(report: dict) -> float:
 
 def print_report(report: dict):
     print("=" * 72)
-    print(f"  {report['ticker']}  —  {report['n_anni_dati_effettivi']} anni di dati effettivi")
+    print(f"  {report['ticker']}  —  {report['n_years_actual_data']} years of actual data")
     print("=" * 72)
 
-    print(f"\nMese corrente ({report['mese_corrente']}):")
-    s = report["stagionalita_mese_corrente"]
+    print(f"\nCurrent month ({report['current_month']}):")
+    s = report["seasonality_current_month"]
     if s:
-        print(f"  rendimento medio storico: {s['media_pct']:+.2f}%  |  win rate: {s['win_rate_pct']}%  "
-              f"|  osservazioni: {int(s['n_oss'])}  |  {report['affidabilita_mese_corrente']}")
+        print(f"  avg historical return: {s['avg_pct']:+.2f}%  |  win rate: {s['win_rate_pct']}%  "
+              f"|  observations: {int(s['n_obs'])}  |  {report['reliability_current_month']}")
     else:
-        print("  dati insufficienti per questo mese")
+        print("  insufficient data for this month")
 
-    s2 = report["stagionalita_mese_prossimo"]
-    print(f"\nMese prossimo ({report['mese_prossimo']}):")
+    s2 = report["seasonality_next_month"]
+    print(f"\nNext month ({report['next_month']}):")
     if s2:
-        print(f"  rendimento medio storico: {s2['media_pct']:+.2f}%  |  win rate: {s2['win_rate_pct']}%  "
-              f"|  osservazioni: {int(s2['n_oss'])}")
+        print(f"  avg historical return: {s2['avg_pct']:+.2f}%  |  win rate: {s2['win_rate_pct']}%  "
+              f"|  observations: {int(s2['n_obs'])}")
     else:
-        print("  dati insufficienti per questo mese")
+        print("  insufficient data for this month")
 
-    print("\nStagionalita completa (dal mese storicamente migliore al peggiore):")
-    print(report["tabella_completa"].to_string())
+    print("\nFull seasonality table (best to worst month historically):")
+    print(report["full_table"].to_string())
 
-    print("\nVolatilita storica realizzata (proxy costo opzioni — vedi limiti in README.md):")
-    v = report["volatilita"]
-    if v["hv_percentile_storico"] is not None:
-        print(f"  HV attuale: {v['hv_attuale_pct']}%  |  percentile storico: {v['hv_percentile_storico']}°"
-              f"  (range periodo: {v['hv_min_periodo_pct']}% - {v['hv_max_periodo_pct']}%)")
-        if v["hv_percentile_storico"] < 25:
-            print("  -> volatilita storicamente BASSA: opzioni probabilmente piu economiche del solito")
-        elif v["hv_percentile_storico"] > 75:
-            print("  -> volatilita storicamente ALTA: opzioni probabilmente piu costose del solito")
+    print("\nRealized historical volatility (option cost proxy — see limitations in README.md):")
+    v = report["volatility"]
+    if v["hv_percentile"] is not None:
+        print(f"  current HV: {v['hv_current_pct']}%  |  historical percentile: {v['hv_percentile']}th"
+              f"  (period range: {v['hv_min_period_pct']}% - {v['hv_max_period_pct']}%)")
+        if v["hv_percentile"] < 25:
+            print("  -> historically LOW volatility: options are probably cheaper than usual")
+        elif v["hv_percentile"] > 75:
+            print("  -> historically HIGH volatility: options are probably more expensive than usual")
         else:
-            print("  -> volatilita nella norma rispetto al proprio storico")
+            print("  -> volatility within normal range relative to own history")
     else:
-        print("  dati insufficienti")
+        print("  insufficient data")
 
-    if "opzioni_snapshot" in report:
-        print("\nSnapshot IV reale dalla catena opzioni live (dati di mercato attuali):")
-        snap = report["opzioni_snapshot"]
+    if "options_snapshot" in report:
+        print("\nLive IV snapshot from options chain (current market data):")
+        snap = report["options_snapshot"]
         if isinstance(snap, list) and snap:
             for s3 in snap:
-                print(f"  scadenza {s3['scadenza']}: spot {s3['spot']}, strike ATM {s3['strike_atm']}  |  "
-                      f"IV call {s3['iv_call_pct']}% (bid {s3['bid_call']}/ask {s3['ask_call']})  |  "
-                      f"IV put {s3['iv_put_pct']}% (bid {s3['bid_put']}/ask {s3['ask_put']})")
+                print(f"  expiry {s3['expiry']}: spot {s3['spot']}, ATM strike {s3['strike_atm']}  |  "
+                      f"call IV {s3['iv_call_pct']}% (bid {s3['bid_call']}/ask {s3['ask_call']})  |  "
+                      f"put IV {s3['iv_put_pct']}% (bid {s3['bid_put']}/ask {s3['ask_put']})")
         elif isinstance(snap, list):
-            print("  nessuna opzione quotata trovata per questo ticker")
+            print("  no listed options found for this ticker")
         else:
             print(f"  {snap}")
 
-    print(f"\nPunteggio combinato per ranking (stagionalita + sconto volatilita): {score_opportunity(report)}")
+    print(f"\nCombined score for ranking (seasonality + volatility discount): {score_opportunity(report)}")
     print()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Screener stagionalita + volatilita per opzioni")
-    parser.add_argument("--tickers", required=True, help="Lista ticker separati da virgola, es: GLD,XRT,EQT,UNG")
-    parser.add_argument("--years", type=int, default=5, help="Anni di storico da analizzare (default 5)")
-    parser.add_argument("--no-options", action="store_true", help="Salta il recupero della catena opzioni live")
-    parser.add_argument("--csv", help="Salva il ranking finale in un file CSV")
+    parser = argparse.ArgumentParser(description="Seasonality + volatility screener for options")
+    parser.add_argument("--tickers", required=True, help="Comma-separated list of tickers, e.g.: GLD,XRT,EQT,UNG")
+    parser.add_argument("--years", type=int, default=5, help="Years of history to analyze (default 5)")
+    parser.add_argument("--no-options", action="store_true", help="Skip the live options chain fetch")
+    parser.add_argument("--csv", help="Save the final ranking to a CSV file")
     args = parser.parse_args()
 
     tickers = [t.strip().upper() for t in args.tickers.split(",")]
     reports = []
 
     for ticker in tickers:
-        print(f"Scaricando dati per {ticker}...")
+        print(f"Downloading data for {ticker}...")
         try:
             report = analyze_ticker(ticker, args.years, fetch_options=not args.no_options)
             reports.append(report)
         except Exception as e:
-            print(f"  ERRORE su {ticker}: {e}", file=sys.stderr)
+            print(f"  ERROR on {ticker}: {e}", file=sys.stderr)
 
     if not reports:
-        print("Nessun dato analizzabile. Controlla i ticker e la connessione internet.", file=sys.stderr)
+        print("No analyzable data. Check the tickers and your internet connection.", file=sys.stderr)
         sys.exit(1)
 
     print("\n\n" + "#" * 72)
-    print("#  REPORT DETTAGLIATO PER TICKER")
+    print("#  DETAILED REPORT PER TICKER")
     print("#" * 72 + "\n")
     for r in reports:
         print_report(r)
 
     print("#" * 72)
-    print("#  RANKING FINALE (punteggio combinato, decrescente)")
+    print("#  FINAL RANKING (combined score, descending)")
     print("#" * 72)
     ranking = sorted(reports, key=score_opportunity, reverse=True)
     rows = []
     for r in ranking:
         rows.append({
             "ticker": r["ticker"],
-            "punteggio": score_opportunity(r),
-            "hv_percentile": r["volatilita"]["hv_percentile_storico"],
-            "stagionalita_mese_corrente_pct": r["stagionalita_mese_corrente"]["media_pct"] if r["stagionalita_mese_corrente"] else None,
-            "stagionalita_mese_prossimo_pct": r["stagionalita_mese_prossimo"]["media_pct"] if r["stagionalita_mese_prossimo"] else None,
+            "score": score_opportunity(r),
+            "hv_percentile": r["volatility"]["hv_percentile"],
+            "seasonality_current_month_pct": r["seasonality_current_month"]["avg_pct"] if r["seasonality_current_month"] else None,
+            "seasonality_next_month_pct": r["seasonality_next_month"]["avg_pct"] if r["seasonality_next_month"] else None,
         })
     ranking_df = pd.DataFrame(rows)
     print(ranking_df.to_string(index=False))
 
     if args.csv:
         ranking_df.to_csv(args.csv, index=False)
-        print(f"\nRanking salvato in {args.csv}")
+        print(f"\nRanking saved to {args.csv}")
 
 
 if __name__ == "__main__":
