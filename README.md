@@ -1,4 +1,4 @@
-# py-screener — Seasonality + Volatility Screener for Options
+# seasonal-screener — Seasonality + Volatility Screener for Options
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
@@ -46,8 +46,8 @@ Requires **Python 3.10+** and an internet connection. No paid data feed — all
 prices and options chains are fetched from Yahoo Finance via `yfinance`.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/py-screener.git
-cd py-screener
+git clone https://github.com/YOUR_USERNAME/seasonal-screener.git
+cd seasonal-screener
 python3 -m venv venv
 source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -316,9 +316,9 @@ snippet.
    ```yaml
    # excerpt from deploy/docker-compose.snippet.yml
    services:
-     py-screener:
+     seasonal-screener:
        build:
-         context: ./py-screener
+         context: ./seasonal-screener
          dockerfile: Dockerfile
        restart: always
        environment:
@@ -337,7 +337,7 @@ snippet.
    same Docker network as nginx.
 
 3. Add an nginx location or server block from `deploy/nginx.conf`. The service
-   is reachable internally as `http://py-screener:8000`.
+   is reachable internally as `http://seasonal-screener:8000`.
 
 4. Optionally add HTTP basic auth (recommended — the dashboard exposes portfolio
    data). See the comments in `deploy/nginx.conf`.

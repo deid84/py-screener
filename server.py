@@ -33,7 +33,7 @@ from iv_archive import load_iv_history
 
 DB_PATH = os.environ.get("IV_ARCHIVE_DB", "iv_archive.db")
 
-logger = logging.getLogger("py-screener")
+logger = logging.getLogger("seasonal-screener")
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
 # App
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="py-screener", version="1.0", lifespan=lifespan)
+app = FastAPI(title="seasonal-screener", version="1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
