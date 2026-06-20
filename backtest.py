@@ -28,6 +28,7 @@ import yfinance as yf
 
 from seasonality import compute_monthly_seasonality, MONTH_NAMES
 from options_analysis import black_scholes_price, RISK_FREE_RATE
+from db import save_backtest_result
 
 VALID_STRATEGIES = ("long-call", "short-put", "long-put", "short-call")
 
@@ -501,6 +502,8 @@ def main():
     parser.add_argument("--strategy", choices=VALID_STRATEGIES, default=None,
                         help="Run options-aware backtest with the given strategy "
                              "(default: price-only backtest)")
+    parser.add_argument("--output", choices=["print", "db"], default="print",
+                        help="Output mode: print to stdout (default) or save to iv_archive.db")
     parser.add_argument("--csv", help="Save the full trade log to a CSV file")
     args = parser.parse_args()
 
@@ -516,10 +519,22 @@ def main():
                     df, args.strategy, args.min_history,
                     args.entry_avg, args.entry_wr, args.trend_filter,
                 )
-                print_options_backtest_report(ticker, result, args.entry_avg, args.entry_wr)
+                if args.output == "db":
+                    save_backtest_result(ticker, args.years, args.strategy,
+                                         args.entry_avg, args.entry_wr,
+                                         result["summary"], result["trades"])
+                    print(f"  {ticker} options backtest saved to database.")
+                else:
+                    print_options_backtest_report(ticker, result, args.entry_avg, args.entry_wr)
             else:
                 result = run_backtest(df, args.min_history, args.entry_avg, args.entry_wr, args.trend_filter)
-                print_backtest_report(ticker, result, args.entry_avg, args.entry_wr)
+                if args.output == "db":
+                    save_backtest_result(ticker, args.years, None,
+                                         args.entry_avg, args.entry_wr,
+                                         result["summary"], result["trades"])
+                    print(f"  {ticker} backtest saved to database.")
+                else:
+                    print_backtest_report(ticker, result, args.entry_avg, args.entry_wr)
             if not result["trades"].empty:
                 result["trades"].insert(0, "ticker", ticker)
                 all_trades.append(result["trades"])

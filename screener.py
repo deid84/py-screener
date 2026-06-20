@@ -36,6 +36,7 @@ from seasonality import compute_monthly_seasonality, MONTH_NAMES, reliability_fl
 from volatility import realized_vol_percentile, fetch_atm_iv_snapshot
 from iv_archive import save_snapshot, compute_iv_rank
 from options_analysis import compute_expected_move, suggest_strategy
+from db import save_screening_result
 
 
 def fetch_history(ticker: str, years: int) -> pd.DataFrame:
@@ -251,6 +252,8 @@ def main():
     parser.add_argument("--no-options", action="store_true", help="Skip the live options chain fetch")
     parser.add_argument("--iv-archive", default="iv_archive.db",
                         help="Path to the IV history database (default: iv_archive.db)")
+    parser.add_argument("--output", choices=["print", "db"], default="print",
+                        help="Output mode: print to stdout (default) or save to iv_archive.db")
     parser.add_argument("--csv", help="Save the final ranking to a CSV file")
     args = parser.parse_args()
 
@@ -262,12 +265,20 @@ def main():
         try:
             report = analyze_ticker(ticker, args.years, fetch_options=not args.no_options, iv_db=args.iv_archive)
             reports.append(report)
+            if args.output == "db":
+                save_screening_result(ticker, args.years, report,
+                                      score_opportunity(report), args.iv_archive)
+                print(f"  Saved to database.")
         except Exception as e:
             print(f"  ERROR on {ticker}: {e}", file=sys.stderr)
 
     if not reports:
         print("No analyzable data. Check the tickers and your internet connection.", file=sys.stderr)
         sys.exit(1)
+
+    if args.output == "db":
+        print(f"\nAll results saved to {args.iv_archive}.")
+        sys.exit(0)
 
     print("\n\n" + "#" * 72)
     print("#  DETAILED REPORT PER TICKER")
