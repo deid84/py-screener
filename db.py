@@ -26,6 +26,13 @@ DEFAULT_DB = "iv_archive.db"
 def _connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS watchlist (
+            ticker     TEXT PRIMARY KEY,
+            added_date TEXT NOT NULL,
+            notes      TEXT
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS screening_results (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             run_date    TEXT NOT NULL,
@@ -178,6 +185,48 @@ def save_backtest_result(ticker: str, years: int, strategy: str | None,
             trades_df.to_json(orient="records"),
         ))
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Watchlist
+# ---------------------------------------------------------------------------
+
+def add_to_watchlist(ticker: str, notes: str | None = None,
+                     db_path: str = DEFAULT_DB):
+    """Add a ticker to the persistent watchlist. Silently ignored if already present."""
+    conn = _connect(db_path)
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO watchlist (ticker, added_date, notes) VALUES (?, ?, ?)",
+            (ticker.upper(), datetime.utcnow().strftime("%Y-%m-%d"), notes),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_from_watchlist(ticker: str, db_path: str = DEFAULT_DB):
+    """Remove a ticker from the watchlist. No-op if not present."""
+    conn = _connect(db_path)
+    try:
+        conn.execute("DELETE FROM watchlist WHERE ticker = ?", (ticker.upper(),))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_watchlist(db_path: str = DEFAULT_DB) -> list[dict]:
+    """Returns all watchlist entries sorted alphabetically."""
+    if not Path(db_path).exists():
+        return []
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT ticker, added_date, notes FROM watchlist ORDER BY ticker ASC"
+        ).fetchall()
+        return [{"ticker": r[0], "added_date": r[1], "notes": r[2]} for r in rows]
     finally:
         conn.close()
 

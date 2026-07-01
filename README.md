@@ -115,11 +115,33 @@ python screener.py --tickers GLD,XRT --years 5 --output db
 python screener.py --tickers GLD,XRT --years 5 --csv ranking.csv
 ```
 
+### Watchlist
+
+Instead of typing tickers every time, store a persistent watchlist in the database:
+
+```bash
+# Add tickers
+python screener.py --add GLD,XRT,EQT,UNG
+
+# Run screener on the whole watchlist
+python screener.py --watchlist --years 5
+
+# Show current watchlist
+python screener.py --list-watchlist
+
+# Remove a ticker
+python screener.py --remove UNG
+```
+
 ### Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--tickers` | required | Comma-separated list of tickers (e.g. `GLD,XRT,EQT`) |
+| `--tickers` | — | Comma-separated list of tickers (e.g. `GLD,XRT,EQT`) |
+| `--watchlist` | off | Run on the stored watchlist instead of `--tickers` |
+| `--add` | — | Add tickers to the watchlist and exit |
+| `--remove` | — | Remove tickers from the watchlist and exit |
+| `--list-watchlist` | off | Print the current watchlist and exit |
 | `--years` | `5` | Years of price history to download |
 | `--no-options` | off | Skip the live options chain fetch |
 | `--output` | `print` | `print` (stdout) or `db` (save to SQLite for the dashboard) |
@@ -132,15 +154,24 @@ python screener.py --tickers GLD,XRT --years 5 --csv ranking.csv
 Historical average return, win rate, number of observations, and a statistical
 significance flag for the current and next calendar month.
 
-The significance flag comes from a one-sample t-test (H₀: avg return = 0):
-- `significant (p=0.021)` — the pattern is unlikely to be random noise
-- `marginal (p=0.08)` — borderline, treat with caution
-- `not significant (p=0.45)` — no reliable edge in this month's history
+The significance flag comes from a one-sample t-test (H₀: avg return = 0),
+with **Benjamini-Hochberg correction** applied across all 12 simultaneous tests
+to control the false discovery rate (without correction, ~0.6 false positives
+are expected at α=0.05):
+- `significant (p_adj=0.021)` — the pattern survives multiple-testing correction
+- `marginal (p_adj=0.08)` — borderline, treat with caution
+- `not significant (p_adj=0.45)` — no reliable edge in this month's history
 
 **Full seasonality table**
-All 12 months with `avg_pct`, `std_pct`, `n_obs`, `win_rate_pct`, and `p_value`.
-Use `n_obs` and `p_value` together: a month with `n_obs=4` has too little data
+All 12 months with `avg_pct`, `std_pct`, `n_obs`, `win_rate_pct`, `p_value`, and `p_value_adj`.
+Use `n_obs` and `p_value_adj` together: a month with `n_obs=4` has too little data
 regardless of p-value.
+
+**Earnings warning**
+If an earnings date is detected within the next 45 days (via `yfinance` calendar),
+a warning is shown at the top of the ticker report. Earnings inside the DTE window
+cause IV to behave atypically and make the seasonal signal unreliable for options.
+Note: only works for single stocks — ETFs have no earnings date in yfinance.
 
 **Realized historical volatility (HV)**
 Current 20-day realized volatility and its percentile relative to the downloaded

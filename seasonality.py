@@ -13,6 +13,31 @@ MONTH_NAMES = {
 }
 
 
+def _bh_correction(p_values: np.ndarray) -> np.ndarray:
+    """
+    Benjamini-Hochberg FDR correction for multiple comparisons.
+    NaN entries (too few observations) are left as NaN.
+    Returns adjusted p-values clipped to [0, 1].
+    """
+    m = len(p_values)
+    adj = np.full(m, np.nan)
+    valid_mask = ~np.isnan(p_values)
+    if not valid_mask.any():
+        return adj
+
+    idx = np.where(valid_mask)[0]
+    pv = p_values[idx]
+    order = np.argsort(pv)
+    ranks = np.argsort(order) + 1          # 1-based rank among valid p-values
+    n_valid = len(pv)
+    adjusted = pv[order] * n_valid / np.arange(1, n_valid + 1)
+    # enforce monotonicity: running minimum from the largest rank
+    for i in range(n_valid - 2, -1, -1):
+        adjusted[i] = min(adjusted[i], adjusted[i + 1])
+    adj[idx] = np.clip(adjusted[np.argsort(order)], 0, 1)
+    return adj
+
+
 def compute_monthly_seasonality(price_df: pd.DataFrame) -> pd.DataFrame:
     """
     price_df: DataFrame with a 'Close' column indexed by DatetimeIndex
@@ -50,6 +75,11 @@ def compute_monthly_seasonality(price_df: pd.DataFrame) -> pd.DataFrame:
 
     stats["p_value"] = monthly.groupby("month")["ret_pct"].apply(_pvalue)
 
+    # Benjamini-Hochberg FDR correction across all 12 simultaneous tests.
+    # Prevents ~0.6 expected false positives at α=0.05 from the 12 t-tests.
+    raw = stats["p_value"].values.astype(float)
+    stats["p_value_adj"] = _bh_correction(raw)
+
     # months missing from the dataset (e.g. ticker too recent) are dropped
     stats.index = [MONTH_NAMES[m] for m in stats.index]
     stats.index.name = "month"
@@ -65,20 +95,22 @@ def best_and_worst_months(stats: pd.DataFrame, n: int = 3):
 
 def reliability_flag(row: "pd.Series") -> str:
     """
-    Qualitative flag on the statistical robustness of the seasonal pattern
-    for a single month, based on a one-sample t-test (H0: avg return == 0).
+    Qualitative flag based on the BH-adjusted p-value (H0: avg return == 0).
+    Uses the adjusted p-value to account for multiple testing across 12 months.
     """
     if row["n_obs"] < 5:
         return "very small sample (n<5)"
-    p = row.get("p_value", np.nan)
+    p_adj = row.get("p_value_adj", np.nan)
+    p_raw = row.get("p_value", np.nan)
+    p = p_adj if (p_adj is not None and not np.isnan(p_adj)) else p_raw
     if p is not None and not np.isnan(p):
         if p < 0.05:
-            return f"significant (p={p:.3f})"
+            return f"significant (p_adj={p:.3f})"
         elif p < 0.10:
-            return f"marginal (p={p:.3f})"
+            return f"marginal (p_adj={p:.3f})"
         else:
-            return f"not significant (p={p:.3f})"
-    # fallback if p_value unavailable
+            return f"not significant (p_adj={p:.3f})"
+    # fallback if p-value unavailable
     if abs(row["std_pct"]) > abs(row["avg_pct"]) * 2:
         return "high noise relative to signal"
     if row["win_rate_pct"] >= 70 or row["win_rate_pct"] <= 30:

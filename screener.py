@@ -26,6 +26,8 @@ See README.md for methodological limitations (in particular regarding
 volatility estimation, see volatility.py).
 """
 import argparse
+import contextlib
+import io
 import os
 import sys
 from datetime import datetime
@@ -39,7 +41,7 @@ from seasonality import compute_monthly_seasonality, MONTH_NAMES, reliability_fl
 from volatility import realized_vol_percentile, fetch_atm_iv_snapshot
 from iv_archive import save_snapshot, compute_iv_rank
 from options_analysis import compute_expected_move, suggest_strategy
-from db import save_screening_result
+from db import save_screening_result, add_to_watchlist, remove_from_watchlist, load_watchlist
 
 
 def fetch_history(ticker: str, years: int) -> pd.DataFrame:
@@ -50,6 +52,48 @@ def fetch_history(ticker: str, years: int) -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
+
+
+def check_earnings(ticker: str, dte: int = 45) -> dict | None:
+    """
+    Returns a warning dict if an earnings date falls within the next `dte` days,
+    None otherwise. A known earnings inside the DTE window changes IV dynamics
+    and makes the seasonal signal unreliable for options strategies.
+    """
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            cal = yf.Ticker(ticker).calendar
+        if not cal:
+            return None
+        # calendar is a dict; 'Earnings Date' may be a list or a single Timestamp
+        raw = cal.get("Earnings Date") or cal.get("earnings_date")
+        if raw is None:
+            return None
+        dates = raw if isinstance(raw, list) else [raw]
+        today = datetime.now().date()
+        upcoming = []
+        for d in dates:
+            try:
+                ed = d.date() if hasattr(d, "date") else datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+                days_away = (ed - today).days
+                if 0 <= days_away <= dte:
+                    upcoming.append({"date": str(ed), "days_away": days_away})
+            except Exception:
+                continue
+        if upcoming:
+            nearest = min(upcoming, key=lambda x: x["days_away"])
+            return {
+                "warning": True,
+                "nearest_date": nearest["date"],
+                "days_away": nearest["days_away"],
+                "message": (
+                    f"EARNINGS in {nearest['days_away']} days ({nearest['date']}) — "
+                    f"IV may behave differently; seasonal signal less reliable for options"
+                ),
+            }
+    except Exception:
+        pass
+    return None
 
 
 def analyze_ticker(ticker: str, years: int, fetch_options: bool = True, iv_db: str = "iv_archive.db") -> dict:
@@ -75,6 +119,8 @@ def analyze_ticker(ticker: str, years: int, fetch_options: bool = True, iv_db: s
         "full_table": seas,
         "volatility": vol,
     }
+
+    report["earnings_warning"] = check_earnings(ticker)
 
     if fetch_options:
         try:
@@ -149,6 +195,10 @@ def print_report(report: dict):
     print("=" * 72)
     print(f"  {report['ticker']}  —  {report['n_years_actual_data']} years of actual data")
     print("=" * 72)
+
+    ew = report.get("earnings_warning")
+    if ew:
+        print(f"\n  ⚠  {ew['message']}")
 
     print(f"\nCurrent month ({report['current_month']}):")
     s = report["seasonality_current_month"]
@@ -250,7 +300,15 @@ def print_report(report: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="Seasonality + volatility screener for options")
-    parser.add_argument("--tickers", required=True, help="Comma-separated list of tickers, e.g.: GLD,XRT,EQT,UNG")
+    parser.add_argument("--tickers", help="Comma-separated list of tickers, e.g.: GLD,XRT,EQT,UNG")
+    parser.add_argument("--watchlist", action="store_true",
+                        help="Use the stored watchlist as the ticker list")
+    parser.add_argument("--add", metavar="TICKER[,...]",
+                        help="Add one or more tickers to the watchlist and exit")
+    parser.add_argument("--remove", metavar="TICKER[,...]",
+                        help="Remove one or more tickers from the watchlist and exit")
+    parser.add_argument("--list-watchlist", action="store_true",
+                        help="Print the current watchlist and exit")
     parser.add_argument("--years", type=int, default=5, help="Years of history to analyze (default 5)")
     parser.add_argument("--no-options", action="store_true", help="Skip the live options chain fetch")
     parser.add_argument("--iv-archive", default=_DEFAULT_DB,
@@ -260,7 +318,42 @@ def main():
     parser.add_argument("--csv", help="Save the final ranking to a CSV file")
     args = parser.parse_args()
 
-    tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    # Watchlist management commands — run and exit immediately
+    if args.add:
+        for t in args.add.split(","):
+            add_to_watchlist(t.strip(), db_path=args.iv_archive)
+            print(f"Added {t.strip().upper()} to watchlist.")
+        sys.exit(0)
+    if args.remove:
+        for t in args.remove.split(","):
+            remove_from_watchlist(t.strip(), db_path=args.iv_archive)
+            print(f"Removed {t.strip().upper()} from watchlist.")
+        sys.exit(0)
+    if args.list_watchlist:
+        entries = load_watchlist(db_path=args.iv_archive)
+        if not entries:
+            print("Watchlist is empty.")
+        else:
+            print(f"{'Ticker':<10} {'Added':>12}  Notes")
+            print("-" * 40)
+            for e in entries:
+                print(f"{e['ticker']:<10} {e['added_date']:>12}  {e['notes'] or ''}")
+        sys.exit(0)
+
+    # Resolve tickers: from --tickers or --watchlist
+    if args.watchlist:
+        entries = load_watchlist(db_path=args.iv_archive)
+        if not entries:
+            print("Watchlist is empty. Add tickers with --add TICKER.", file=sys.stderr)
+            sys.exit(1)
+        tickers = [e["ticker"] for e in entries]
+        print(f"Using watchlist: {', '.join(tickers)}")
+    elif args.tickers:
+        tickers = [t.strip().upper() for t in args.tickers.split(",")]
+    else:
+        print("Specify --tickers or --watchlist (or --add/--remove to manage it).", file=sys.stderr)
+        sys.exit(1)
+
     reports = []
 
     for ticker in tickers:
