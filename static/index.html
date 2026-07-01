@@ -104,6 +104,23 @@
     #iv-chart-wrap p { color: var(--muted); font-size: 13px; }
 
     .loading { color: var(--muted); padding: 40px; text-align: center; }
+
+    .earnings-banner {
+      display: none; padding: 10px 18px;
+      background: rgba(246,201,14,.10); border-bottom: 1px solid rgba(246,201,14,.25);
+      color: var(--yellow); font-size: 13px; font-weight: 500;
+    }
+
+    .align-badge {
+      display: inline-block; font-size: 11px; font-weight: 700;
+      padding: 2px 8px; border-radius: 4px; letter-spacing: .04em;
+    }
+    .align-aligned   { background: rgba(72,187,120,.18); color: var(--green); }
+    .align-divergent { background: rgba(252,129,129,.18); color: var(--red); }
+    .align-neutral   { background: rgba(113,128,150,.18); color: var(--muted); }
+
+    .liq-ok  { color: var(--green); }
+    .liq-bad { color: var(--red); }
   </style>
 </head>
 <body>
@@ -143,6 +160,7 @@
 
   <div id="detail-panel" class="card">
     <div class="card-title" id="detail-title">Detail</div>
+    <div id="earnings-banner" class="earnings-banner"></div>
     <div class="detail-grid">
 
       <div class="detail-section">
@@ -166,11 +184,16 @@
       </div>
 
       <div class="detail-section" style="grid-column: 1 / -1">
+        <h3>Technical context</h3>
+        <div id="tech-kv"></div>
+      </div>
+
+      <div class="detail-section" style="grid-column: 1 / -1">
         <h3>Full seasonality table</h3>
         <div style="overflow-x:auto">
           <table class="seas-table" id="full-seas-table">
             <thead>
-              <tr><th>Month</th><th>Avg%</th><th>Std%</th><th>n</th><th>Win rate%</th><th>p-value</th></tr>
+              <tr><th>Month</th><th>Avg%</th><th>Std%</th><th>n</th><th>Win rate%</th><th>p-value</th><th>Consistency</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -321,9 +344,19 @@ function renderDetail(d) {
   const ivr   = r.iv_rank || {};
   const snap  = (r.options_snapshot || [])[0] || {};
   const gc    = snap.greeks_call || {};
+  const tech  = r.technicals || {};
 
   document.getElementById('detail-title').textContent = `Detail — ${d.ticker}`;
   document.getElementById('detail-panel').style.display = 'block';
+
+  // Earnings warning banner
+  const eb = document.getElementById('earnings-banner');
+  if (r.earnings_warning) {
+    eb.textContent = '⚠  ' + r.earnings_warning.message;
+    eb.style.display = 'block';
+  } else {
+    eb.style.display = 'none';
+  }
 
   // Seasonality
   document.getElementById('seas-kv').innerHTML = [
@@ -332,12 +365,19 @@ function renderDetail(d) {
        seas.avg_pct >= 0 ? 'color:var(--green)' : 'color:var(--red)'),
     kv('Win rate', seas.win_rate_pct != null ? seas.win_rate_pct+'%' : null),
     kv('Significance', r.reliability_current_month),
+    kv('Consistency', seas.consistency),
     kv('Next month', r.next_month),
     kv('Next avg return', seas2.avg_pct != null ? (seas2.avg_pct>=0?'+':'')+seas2.avg_pct.toFixed(2)+'%' : null),
     kv('Next win rate', seas2.win_rate_pct != null ? seas2.win_rate_pct+'%' : null),
+    kv('Next consistency', seas2.consistency),
   ].join('');
 
   // Volatility
+  const liqOk = snap.liquidity_ok;
+  const liqLabel = liqOk === true ? '<span class="liq-ok">✓ liquid</span>'
+                 : liqOk === false ? '<span class="liq-bad">✗ illiquid</span>' : null;
+  const spreadStr = (snap.spread_pct_call != null && snap.spread_pct_put != null)
+    ? `call ${snap.spread_pct_call}% / put ${snap.spread_pct_put}%` : null;
   document.getElementById('vol-kv').innerHTML = [
     kv('Current HV', vol.hv_current_pct != null ? vol.hv_current_pct+'%' : null),
     kv('HV percentile', vol.hv_percentile != null ? vol.hv_percentile+'th' : null),
@@ -348,11 +388,17 @@ function renderDetail(d) {
     kv('ATM IV (call)', snap.iv_call_pct != null ? snap.iv_call_pct+'%' : null),
     kv('ATM IV (put)', snap.iv_put_pct  != null ? snap.iv_put_pct+'%'  : null),
     kv('Skew (put−call)', snap.skew_pct != null ? (snap.skew_pct>=0?'+':'')+snap.skew_pct+'pp' : null),
+    kv('Bid-ask spread', spreadStr),
+    kv('Liquidity', liqLabel),
   ].join('');
 
   // Options analysis
   const em = oa.expected_move || {};
+  const ta = r.trend_alignment;
+  const taClass = ta === 'aligned' ? 'align-aligned' : ta === 'divergent' ? 'align-divergent' : 'align-neutral';
+  const taLabel = ta ? `<span class="align-badge ${taClass}">${ta.toUpperCase()}</span>` : null;
   document.getElementById('opt-kv').innerHTML = [
+    kv('Trend alignment', taLabel),
     kv('Bias', oa.bias ? oa.bias.toUpperCase() : null),
     kv('IV level', oa.iv_level ? oa.iv_level.toUpperCase() : null),
     kv('Strategy', oa.strategy),
@@ -373,6 +419,21 @@ function renderDetail(d) {
     kv('How structure', oa.structure),
   ].join('') : '<div class="kv-row"><span class="kv-label" style="color:var(--muted)">No options data available</span></div>';
 
+  // Technicals
+  const techBiasColor = tech.trend_bias === 'bullish' ? 'color:var(--green)'
+                      : tech.trend_bias === 'bearish' ? 'color:var(--red)' : '';
+  document.getElementById('tech-kv').innerHTML = tech.error ? `<div class="kv-row"><span class="kv-label" style="color:var(--muted)">${tech.error}</span></div>` : [
+    kv('Price', tech.current_price != null ? '$'+tech.current_price : null),
+    kv('vs MA50', tech.price_vs_ma50_pct != null ? (tech.price_vs_ma50_pct>=0?'+':'')+tech.price_vs_ma50_pct+'%  (MA50 $'+tech.ma50+')' : null,
+       tech.price_vs_ma50_pct >= 0 ? 'color:var(--green)' : 'color:var(--red)'),
+    kv('vs MA200', tech.price_vs_ma200_pct != null ? (tech.price_vs_ma200_pct>=0?'+':'')+tech.price_vs_ma200_pct+'%  (MA200 $'+tech.ma200+')' : null,
+       tech.price_vs_ma200_pct >= 0 ? 'color:var(--green)' : 'color:var(--red)'),
+    kv('RSI(14)', tech.rsi14 != null ? tech.rsi14+' ('+tech.rsi_label+')' : null,
+       tech.rsi_label === 'overbought' ? 'color:var(--red)' : tech.rsi_label === 'oversold' ? 'color:var(--green)' : ''),
+    kv('52w range', tech.range_52w_pct != null ? tech.range_52w_pct+'th percentile' : null),
+    kv('Trend bias', tech.trend_bias ? tech.trend_bias.toUpperCase() : null, techBiasColor),
+  ].join('');
+
   // Full seasonality table
   const ft = r.full_table || [];
   const tbody = document.querySelector('#full-seas-table tbody');
@@ -388,6 +449,7 @@ function renderDetail(d) {
       <td>${row.n_obs ?? '—'}</td>
       <td>${row.win_rate_pct != null ? row.win_rate_pct+'%' : '—'}</td>
       <td style="color:${row.p_value<0.05?'var(--green)':row.p_value<0.1?'var(--yellow)':'var(--muted)'}">${pStr}</td>
+      <td style="color:${row.consistency==='consistent'?'var(--green)':row.consistency==='mixed'?'var(--yellow)':'var(--muted)'}">${row.consistency||'—'}</td>
     </tr>`;
   });
 

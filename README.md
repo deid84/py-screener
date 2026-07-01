@@ -11,6 +11,9 @@ Data source: Yahoo Finance via `yfinance`. No paid data feed required.
 
 ---
 
+> **Trader?** Start with **[GUIDE.md](GUIDE.md)** — it explains how to read
+> every metric in the output, when to act on a signal, and when to skip it.
+
 ## Table of contents
 
 1. [What it does](#what-it-does)
