@@ -56,6 +56,11 @@ def compute_monthly_seasonality(price_df: pd.DataFrame) -> pd.DataFrame:
     monthly["ret_pct"] = (monthly["last"] / monthly["first"] - 1) * 100
     monthly = monthly.reset_index()
 
+    # exclude the current incomplete month — a partial return is not comparable
+    # to complete monthly returns and would make statistics unstable day-to-day
+    today = pd.Timestamp.today()
+    monthly = monthly[~((monthly["year"] == today.year) & (monthly["month"] == today.month))]
+
     stats = monthly.groupby("month")["ret_pct"].agg(
         avg_pct="mean",
         std_pct="std",
@@ -107,6 +112,9 @@ def check_subperiod_consistency(price_df: pd.DataFrame) -> pd.Series:
     monthly = df.groupby(["year", "month"])["Close"].agg(["first", "last"])
     monthly["ret_pct"] = (monthly["last"] / monthly["first"] - 1) * 100
     monthly = monthly.reset_index()
+
+    today = pd.Timestamp.today()
+    monthly = monthly[~((monthly["year"] == today.year) & (monthly["month"] == today.month))]
 
     years = sorted(monthly["year"].unique())
     mid = len(years) // 2
